@@ -1,0 +1,34 @@
+# Core — required on all platforms
+litellm>=1.35
+tomli>=2.0; python_version < "3.11"
+mss>=9.0
+pyperclip>=1.8
+watchdog>=4.0
+numpy>=1.24
+
+# ── Audio (microphone + transcription) ───────────────────────────────────────
+# All optional: watcher/audio.py detects what's installed and degrades gracefully
+sounddevice>=0.4.6           # cross-platform audio I/O (requires portaudio on macOS/Linux)
+faster-whisper>=1.0.0        # local speech-to-text, CPU/GPU, all platforms
+
+# webrtcvad: VAD (voice activity detection)
+# Windows users: install webrtcvad-wheels instead (precompiled, no C compiler needed)
+#   pip install webrtcvad-wheels
+# macOS/Linux:
+webrtcvad>=2.0.10; sys_platform != "win32"
+
+# ── Camera ───────────────────────────────────────────────────────────────────
+# All optional: watcher/camera.py detects camera at runtime and skips if absent
+opencv-python-headless>=4.8  # cross-platform, no GUI dependencies
+
+# ── Image file reading ───────────────────────────────────────────────────────
+Pillow>=10.0                 # image loading + format conversion (JPEG/PNG/WEBP/HEIC/etc.)
+
+# ── Keyboard + Mouse tracking ────────────────────────────────────────────────
+# Optional: watcher/input_tracker.py degrades gracefully if absent
+# macOS: also requires Accessibility permission in System Preferences
+pynput>=1.7.6               # cross-platform keyboard + mouse listener
+
+# ── OCR ──────────────────────────────────────────────────────────────────────
+# macOS: pip install ocrmac          (Apple Vision, best quality)
+# All:   pip install pytesseract Pillow + brew/apt/choco install tesseract

@@ -1,0 +1,26 @@
+# Onion Shell — Docker Compose
+# Usage: docker compose up -d
+# Open:  http://localhost:7070
+#
+# The watcher (screen capture) runs on the host automatically via entrypoint.
+# Docker handles only the web UI.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "7070:7070"
+    volumes:
+      - "${HOME}/.onion_shell:/root/.onion_shell"
+      - "/Volumes/ACGcomrade_entelechy/kaiMemoriesProject/kaiData:/kaiData"
+    environment:
+      - ONION_WEB_ONLY=1
+      - ONION_PORT=7070
+      - ONION_OLLAMA_URL=http://host.docker.internal:11434
+      - TZ=${ONION_TZ:-UTC}
+      - ONION_KAIDATA_PATH=/kaiData
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

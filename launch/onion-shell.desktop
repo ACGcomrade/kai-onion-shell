@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Onion Shell
+Comment=AI context-aware assistant
+Exec=bash /path/to/kai onion shell/launch/launch_linux.sh
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;

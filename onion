@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# onion — Onion Shell launcher (Docker-based web UI)
+#
+# First-time setup:
+#   bash "/Volumes/ACGcomrade_entelechy/kaiMemoriesProject/kai onion shell/onion" install
+#   # Then open a new terminal and type: onion
+
+ONION_DIR="/Volumes/ACGcomrade_entelechy/kaiMemoriesProject/kai onion shell"
+ONION_PORT="${ONION_PORT:-7070}"
+WATCHER_PID_FILE="$HOME/.onion_shell/watcher.pid"
+WATCHER_LOG="$HOME/.onion_shell/watcher.log"
+URL="http://localhost:$ONION_PORT"
+
+# Project-local virtual environment (isolates deps from system Python)
+VENV="$ONION_DIR/.venv"
+VENV_PY="$VENV/bin/python3"
+# Fall back to system python3 if venv not yet created
+if [ -f "$VENV_PY" ]; then
+    ONION_PY="$VENV_PY"
+else
+    ONION_PY="python3"
+fi
+
+# Detect local timezone for Docker container
+_detect_tz() {
+    if [ -n "$TZ" ]; then
+        echo "$TZ"; return
+    fi
+    # macOS
+    if [ -L /etc/localtime ]; then
+        TZ_LINK=$(readlink /etc/localtime)
+        echo "${TZ_LINK##*/zoneinfo/}"; return
+    fi
+    # Linux
+    if [ -f /etc/timezone ]; then
+        cat /etc/timezone; return
+    fi
+    echo "UTC"
+}
+HOST_TZ=$(_detect_tz)
+export ONION_TZ="$HOST_TZ"
+
+_onion_py() { "$ONION_PY" "$ONION_DIR/onion_shell.py" "$@"; }
+
+_setup_venv() {
+    echo "   Setting up project venv at $VENV..."
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install --upgrade pip -q
+    "$VENV/bin/pip" install -r "$ONION_DIR/requirements.txt" -q
+    # macOS: try ocrmac for Apple Vision OCR (best quality)
+    if [ "$(uname)" = "Darwin" ]; then
+        "$VENV/bin/pip" install ocrmac -q 2>/dev/null || true
+    fi
+    ONION_PY="$VENV_PY"
+    echo "   Venv ready: $VENV_PY"
+}
+
+# Write .env for docker compose (so TZ is correct even on plain `docker compose up`)
+_write_env() {
+    {
+        echo "ONION_TZ=$HOST_TZ"
+        echo "ONION_PORT=$ONION_PORT"
+    } > "$ONION_DIR/.env"
+}
+
+_start_watcher() {
+    mkdir -p "$HOME/.onion_shell"
+    # Kill stale watcher
+    if [ -f "$WATCHER_PID_FILE" ]; then
+        OLD_PID=$(cat "$WATCHER_PID_FILE")
+        kill "$OLD_PID" 2>/dev/null
+    fi
+    cd "$ONION_DIR"
+    nohup "$ONION_PY" onion_shell.py _daemon > "$WATCHER_LOG" 2>&1 &
+    echo $! > "$WATCHER_PID_FILE"
+    echo "   Watcher started (PID $!, log: $WATCHER_LOG)"
+}
+
+_docker_up() {
+    cd "$ONION_DIR"
+    if ! docker image inspect kaionionshell-web:latest &>/dev/null; then
+        echo "   Building Docker image (first time, ~30s)..."
+        docker compose build --quiet
+    fi
+    docker compose up -d --force-recreate
+}
+
+_docker_down() {
+    cd "$ONION_DIR"
+    docker compose down
+}
+
+_docker_running() {
+    docker ps --filter "name=kaionionshell" --filter "status=running" -q 2>/dev/null | grep -q .
+}
+
+_watcher_running() {
+    [ -f "$WATCHER_PID_FILE" ] && kill -0 "$(cat "$WATCHER_PID_FILE")" 2>/dev/null
+}
+
+case "${1:-start}" in
+
+  start|"")
+    echo "🧅 Onion Shell"
+    echo ""
+
+    # Write .env (timezone + port) for docker compose
+    _write_env
+
+    # 1. Start watcher on host (needs macOS screen/app permissions)
+    if _watcher_running; then
+        echo "   Watcher already running (PID $(cat "$WATCHER_PID_FILE"))"
+    else
+        _start_watcher
+    fi
+
+    # 2. Start Docker web UI
+    if _docker_running; then
+        echo "   Web UI already running"
+    else
+        echo "   Starting web UI..."
+        _docker_up
+        sleep 2
+    fi
+
+    echo ""
+    echo "   Open: $URL"
+    echo ""
+
+    # Open in browser
+    if command -v open &>/dev/null; then
+        open "$URL"
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "$URL"
+    fi
+    ;;
+
+  stop)
+    echo "🧅 Stopping Onion Shell..."
+
+    # Stop Docker web UI
+    if _docker_running; then
+        _docker_down
+        echo "   Web UI stopped"
+    fi
+
+    # Stop watcher
+    if _watcher_running; then
+        kill "$(cat "$WATCHER_PID_FILE")" 2>/dev/null
+        rm -f "$WATCHER_PID_FILE"
+        echo "   Watcher stopped"
+    fi
+    ;;
+
+  restart)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+
+  status)
+    echo "🧅 Onion Shell Status"
+    echo ""
+
+    # Docker
+    if _docker_running; then
+        CONTAINER=$(docker ps --filter "name=kaionionshell" --format "{{.Names}} ({{.Status}})" 2>/dev/null)
+        echo "   Web UI: ● running — $CONTAINER"
+        echo "   URL:    $URL"
+    else
+        echo "   Web UI: ○ stopped"
+    fi
+
+    # Watcher
+    if _watcher_running; then
+        echo "   Watcher: ● running (PID $(cat "$WATCHER_PID_FILE"))"
+    else
+        echo "   Watcher: ○ stopped"
+    fi
+
+    # DB stats
+    DB="$HOME/.onion_shell/db.sqlite"
+    if [ -f "$DB" ]; then
+        SIZE_KB=$(du -k "$DB" | cut -f1)
+        echo "   DB: $SIZE_KB KB"
+    fi
+
+    # Docker logs (last 3 lines)
+    if _docker_running; then
+        echo ""
+        echo "   Recent web logs:"
+        docker logs --tail 5 kaionionshell-web-1 2>&1 | sed 's/^/     /'
+    fi
+    ;;
+
+  logs)
+    echo "=== Web UI (Docker) ==="
+    docker logs -f kaionionshell-web-1 2>&1 &
+    echo "=== Watcher (host) ==="
+    tail -f "$WATCHER_LOG" &
+    wait
+    ;;
+
+  watcher-log)
+    tail -f "$WATCHER_LOG"
+    ;;
+
+  web-log)
+    docker logs -f kaionionshell-web-1 2>&1
+    ;;
+
+  ask)
+    shift
+    _onion_py ask "$@"
+    ;;
+
+  pause)
+    touch "$HOME/.onion_shell/paused"
+    echo "⏸ Capture paused"
+    ;;
+
+  resume)
+    rm -f "$HOME/.onion_shell/paused"
+    echo "▶ Capture resumed"
+    ;;
+
+  rebuild)
+    echo "Rebuilding Docker image..."
+    cd "$ONION_DIR"
+    docker compose build
+    echo "Done. Run 'onion restart' to apply."
+    ;;
+
+  setup)
+    # Create project-local venv and install all dependencies
+    _setup_venv
+    echo "   Run 'onion start' to launch."
+    ;;
+
+  install)
+    # Add to PATH via .zshrc + run setup
+    MARKER="# Onion Shell"
+    if ! grep -q "$MARKER" ~/.zshrc 2>/dev/null; then
+        printf '\n%s\nexport PATH="%s:$PATH"\n' "$MARKER" "$ONION_DIR" >> ~/.zshrc
+        echo "   Added to ~/.zshrc — run: source ~/.zshrc"
+    else
+        echo "   Already in ~/.zshrc"
+    fi
+    chmod +x "$ONION_DIR/onion"
+    _setup_venv
+    echo "   Done. Run: onion"
+    ;;
+
+  *)
+    echo "Usage: onion <command>"
+    echo ""
+    echo "  onion              start watcher + web UI, open browser"
+    echo "  onion stop         stop everything"
+    echo "  onion restart      stop then start"
+    echo "  onion status       show what's running"
+    echo "  onion logs         follow all logs"
+    echo "  onion web-log      follow web UI logs (Docker)"
+    echo "  onion watcher-log  follow watcher log (host)"
+    echo "  onion ask \"...\"   ask from terminal"
+    echo "  onion pause        pause screen capture"
+    echo "  onion resume       resume screen capture"
+    echo "  onion rebuild      rebuild Docker image"
+    echo "  onion install      add 'onion' command to PATH"
+    ;;
+esac
